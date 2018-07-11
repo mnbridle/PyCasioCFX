@@ -43,3 +43,4 @@ venv/Scripts/unicodedata.pyd
 venv/Scripts/vcruntime140.dll
 venv/Scripts/winsound.pyd
 .idea/libraries/R_User_Library.xml
+.idea/vcs.xml
