@@ -1,6 +1,5 @@
 import logging
 import numpy as np
-import construct
 
 
 def decode_packet(packet):
@@ -13,7 +12,7 @@ def decode_packet(packet):
 
     decoded_packet = {}
 
-    if not verify_checksum(packet):
+    if not checksum_valid(packet):
         logging.error("Checksum was incorrect!")
         return {}
 
@@ -126,7 +125,7 @@ def decode_value_packet(packet):
     return {'value': np.complex(real_part, imag_part), 'row': row, 'col': col}
 
 
-def verify_checksum(packet):
+def checksum_valid(packet):
     """
     Return true or false depending on if the packet's checksum is verified
     :param packet: The packet in binary string form
@@ -135,6 +134,19 @@ def verify_checksum(packet):
 
     calculated_checksum = (0x01 + (~(sum(packet[:-1]) - 0x3A))) & 0xFF
     return calculated_checksum == packet[-1]
+
+
+def calculate_checksum(packet):
+    """
+    Return packet with checksum appended to the end.
+    :param packet:
+    :return:
+    """
+
+    calculated_checksum = bytes([(0x01 + (~(sum(packet[0:]) - 0x3A))) & 0xFF])
+    packet += calculated_checksum
+
+    return packet
 
 
 def convertBcdDigitsToInt(bcd_digits):
