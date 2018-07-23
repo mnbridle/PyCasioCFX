@@ -80,13 +80,13 @@ class cfxStateMachine(object):
         self.serial_connection.write(b'\x06')
 
     def _processTransaction(self):
-        if self.transaction["packet_type"] == ":REQ":
+        if self.transaction["tag"] == b'REQ':
             self._sendTransactionData()
 
-        elif self.transaction["packet_type"] == ":VAL":
+        elif self.transaction["tag"] == b'VAL':
             self._receiveTransactionData()
 
-        elif self.transaction["packet_type"] == ":END":
+        elif self.transaction["tag"] == b'END':
             print("The calculator is prematurely ending the transaction - nothing to do?")
 
         else:
@@ -94,15 +94,14 @@ class cfxStateMachine(object):
 
         return
 
-
     def _receiveTransactionData(self):
         # Receive some data from the calculator
-        if self.transaction["requested_variable_type"] == "VM":
+        if self.transaction["requested_variable_type"] == cfx_codecs.variableType.VARIABLE:
             number_of_data_items = 1
             transaction_data = None
-        elif self.transaction["requested_variable_type"] == "MT":
+        elif self.transaction["requested_variable_type"] == cfx_codecs.variableType.MATRIX:
             number_of_data_items = self.transaction['row'] * self.transaction['col']
-            self.transaction["complex_or_real"] = "Real"
+            self.transaction["real_or_complex"] = cfx_codecs.realOrComplex.REAL
             transaction_data = [[0 for x in range(self.transaction['col'])] for y in range(self.transaction['row'])]
         else:
             return
@@ -111,19 +110,20 @@ class cfxStateMachine(object):
         while item_count < number_of_data_items:
             succeeded = False
             while not succeeded:
-                serdata = self.serial_connection.read(size=(16 if self.transaction["complex_or_real"] == "Real"
-                                                            else 26))
+                serdata = self.serial_connection.read(size=(16 if self.transaction["real_or_complex"] ==
+                                                                  cfx_codecs.realOrComplex.REAL else 26))
                 succeeded = True
 
             data_item = packet_helpers.decode_value_packet(packet=serdata)
-            if self.transaction["requested_variable_type"] == "MT":
+            if self.transaction["requested_variable_type"] == cfx_codecs.variableType.MATRIX:
                 transaction_data[data_item['row']-1][data_item['col']-1] = data_item['value']
             else:
                 transaction_data = data_item['value']
 
             self._ackTransactionRequest()
-            print(data_item['value'])
             item_count += 1
+
+            print(data_item)
 
         print(transaction_data)
 

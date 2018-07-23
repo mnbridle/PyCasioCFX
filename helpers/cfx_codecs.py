@@ -2,7 +2,7 @@ from construct import \
     Struct, Const, Padding, Int8ub, Bytes, BitStruct, Flag, BitsInteger, Enum, Byte
 
 variableIsInUse = Enum(Bytes(1), TRUE=b'\x01', FALSE=b'\x00')
-realOrComplex = Enum(Bytes(1), REAL=b'R', COMPLEX=b'C')
+realOrComplex = Enum(Bytes(9), REAL=b'VariableR', COMPLEX=b'VariableC')
 variableType = Enum(Bytes(2), VARIABLE=b'VM', LIST=b'LT', MATRIX=b'MT', IMAGE=b'PC')
 
 # Checksum byte needs to be removed before the packet is parsed!
@@ -11,7 +11,7 @@ signinfobyte = BitStruct(
     "isComplex" / Flag,
     "isNegative" / Flag,
     Padding(5),
-    "signIsPositive" / Flag
+    "expSignIsPositive" / Flag
 )
 
 real_value_packet = Struct(
@@ -49,8 +49,10 @@ variable_description_packet = Struct(
     Padding(1),
     "requested_variable_type" / variableType,
     Padding(1),
+    # Doubles as rowsize for matrix data
     "isInUse" / variableIsInUse,
     Padding(1),
+    # Doubles as colsize for matrix data
     Padding(1),
     "variable_name" / Bytes(8),
     "real_or_complex" / realOrComplex,

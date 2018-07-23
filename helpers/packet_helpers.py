@@ -1,5 +1,6 @@
 import logging
 import numpy as np
+from helpers import cfx_codecs
 
 
 def decode_packet(packet):
@@ -16,6 +17,8 @@ def decode_packet(packet):
         logging.error("Checksum was incorrect!")
         return {}
 
+    packet = packet[:-1]
+
     packet_type = packet[0:4].decode('ascii')
 
     if packet_type == ":REQ":
@@ -23,8 +26,6 @@ def decode_packet(packet):
     elif packet_type == ":VAL":
         decoded_packet = decode_value_description_packet(packet)
     elif packet_type == ":END":
-        # Do nothing exciting here - we've checksummed the packet, and there's no information in the END packet.
-        # End transaction?
         pass
     else:
         decoded_packet = decode_value_packet(packet)
@@ -39,18 +40,8 @@ def decode_request_packet(packet):
     :param packet:
     :return:
     """
-    requested_variable_type = packet[5:7].decode('ascii')
-
-    if requested_variable_type == "MT":
-        requested_variable_id = packet[11:16].decode('ascii')
-    elif requested_variable_type == "VM":
-        requested_variable_id = chr(packet[11])
-    elif requested_variable_type == "PC":
-        pass
-    elif requested_variable_type == "LT":
-        requested_variable_id = packet[11:17].decode('ascii')
-
-    return dict(**locals())
+    decoded_packet = cfx_codecs.request_packet.parse(packet)
+    return decoded_packet
 
 
 def decode_value_description_packet(packet):
@@ -60,25 +51,8 @@ def decode_value_description_packet(packet):
     :return:
     """
 
-    requested_variable_type = packet[5:7].decode('ascii')
-
-    if requested_variable_type == "MT":
-        requested_variable_id = packet[11:16].decode('ascii')
-        row = packet[8]
-        col = packet[10]
-    elif requested_variable_type == "VM":
-        requested_variable_id = chr(packet[11])
-        variable_used = bool(packet[8])
-        complex_or_real = ("Complex" if packet[19:28] == b"VariableC" else "Real")
-    elif requested_variable_type == "PC":
-        pass
-    elif requested_variable_type == "LT":
-        requested_variable_id = packet[11:17].decode('ascii')
-
-    else:
-        pass
-
-    return dict(**locals())
+    decoded_packet = cfx_codecs.variable_description_packet.parse(packet)
+    return decoded_packet
 
 
 def decode_value_packet(packet):
@@ -88,41 +62,44 @@ def decode_value_packet(packet):
     :return:
     """
 
-    # Exponent is BCD!
+    if len(packet) == 16:
+        decoded_packet = cfx_codecs.real_value_packet.parse(packet)
+    else:
+        decoded_packet = cfx_codecs.complex_value_packet.parse(packet)
 
-    row, col = (packet[2], packet[4])
-    real_int_part = packet[5]
-    real_frac_part = convertBcdDigitsToInt(packet[6:12])
+    real_int_part = convertBcdDigitsToInt(decoded_packet["real_int"])
+    real_frac_part = convertBcdDigitsToInt(decoded_packet["real_frac"])
+    real_exponent_mag = int(convertBcdDigitsToInt(bytes(decoded_packet["real_exponent"])))
 
-    has_imaginary_part = bool((packet[13] >> 7) & 0x1)
-
-    real_part_sign = (packet[13] >> 6) & 0x1
-    real_exponent_sign = (packet[13] >> 0) & 0x1
-    real_exponent_mag = int(convertBcdDigitsToInt(bytes([packet[14]])))
-    if real_exponent_sign == 0x0:
+    if decoded_packet["real_signinfo"]["expSignIsPositive"] is False:
         real_exponent_mag = -(100-real_exponent_mag)
 
-    real_part = float("{}.{}".format(real_int_part, real_frac_part)) * (-1 if real_part_sign == 0x01 else 1) * \
+    # Exponent is BCD!
+
+    real_part = float("{}.{}".format(
+        real_int_part,
+        real_frac_part)) * (-1 if decoded_packet["real_signinfo"]["isNegative"] is True else 1) * \
         10**real_exponent_mag
 
-    if has_imaginary_part is True:
-        imag_int_part = packet[15]
-        imag_frac_part = convertBcdDigitsToInt(packet[16:22])
+    if decoded_packet["real_signinfo"]["isComplex"] is True:
 
-        imag_part_sign = (packet[23] >> 6) & 0x1
+        imag_int_part = convertBcdDigitsToInt(decoded_packet["imag_int"])
+        imag_frac_part = convertBcdDigitsToInt(decoded_packet["imag_frac"])
+        imag_exponent_mag = int(convertBcdDigitsToInt(bytes(decoded_packet["imag_exponent"])))
 
-        imag_exponent_sign = (packet[23] >> 0) & 0x1
-        imag_exponent_mag = int(convertBcdDigitsToInt(bytes([packet[24]])))
-
-        if imag_exponent_sign == 0x0:
+        if decoded_packet["imag_signinfo"]["expSignIsPositive"] is False:
             imag_exponent_mag = -(100 - imag_exponent_mag)
 
-        imag_part = float("{}.{}".format(imag_int_part, imag_frac_part)) * (-1 if imag_part_sign == 0x01 else 1) * \
-            10**imag_exponent_mag
+        imag_part = float("{}.{}".format(
+            imag_int_part,
+            imag_frac_part)) * (-1 if decoded_packet["imag_signinfo"]["isNegative"] is True else 1) * \
+            10 ** imag_exponent_mag
+
     else:
         imag_part = 0
 
-    return {'value': np.complex(real_part, imag_part), 'row': row, 'col': col}
+    return {'value': np.complex(real_part, imag_part), 'row': ord(decoded_packet["row"]),
+            'col': ord(decoded_packet["col"])}
 
 
 def checksum_valid(packet):

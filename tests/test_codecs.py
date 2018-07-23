@@ -10,23 +10,23 @@ class TestCfxCodecs(unittest.TestCase):
         parsed_signinfobyte = cfx_codecs.signinfobyte.parse(b'\x80')
         self.assertEqual(parsed_signinfobyte["isComplex"], True)
         self.assertEqual(parsed_signinfobyte["isNegative"], False)
-        self.assertEqual(parsed_signinfobyte["signIsPositive"], False)
+        self.assertEqual(parsed_signinfobyte["expSignIsPositive"], False)
 
         parsed_signinfobyte = cfx_codecs.signinfobyte.parse(b'\x40')
         self.assertEqual(parsed_signinfobyte["isComplex"], False)
         self.assertEqual(parsed_signinfobyte["isNegative"], True)
-        self.assertEqual(parsed_signinfobyte["signIsPositive"], False)
+        self.assertEqual(parsed_signinfobyte["expSignIsPositive"], False)
 
         parsed_signinfobyte = cfx_codecs.signinfobyte.parse(b'\x81')
         self.assertEqual(parsed_signinfobyte["isComplex"], True)
         self.assertEqual(parsed_signinfobyte["isNegative"], False)
-        self.assertEqual(parsed_signinfobyte["signIsPositive"], True)
+        self.assertEqual(parsed_signinfobyte["expSignIsPositive"], True)
 
     def test_real_value_packet(self):
         pkt = b':\x00\x00\x00\x00\x01\x01#Eg\x89\x01#\x01B'
         decoded_pkt = Container(row=b'\x00', col=b'\x00', real_int=b'\x01', real_frac=b'\x01#Eg\x89\x01#',
                                 real_signinfo=Container(isComplex=False, isNegative=False,
-                                                        signIsPositive=True), real_exponent=b'B'
+                                                        expSignIsPositive=True), real_exponent=b'B'
                                 )
 
         self.assertEqual(cfx_codecs.real_value_packet.parse(pkt), decoded_pkt)
@@ -38,19 +38,19 @@ class TestCfxCodecs(unittest.TestCase):
                                 real_signinfo=Container(
                                     isComplex=True,
                                     isNegative=False,
-                                    signIsPositive=True
+                                    expSignIsPositive=True
                                 ), real_exponent=b'\x05',
                                 imag_int=b'\x01', imag_frac=b'\x01#Eg\x89\x01#',
                                 imag_signinfo=Container(
                                     isComplex=True,
                                     isNegative=False,
-                                    signIsPositive=True
+                                    expSignIsPositive=True
                                 ), imag_exponent=b'\x05')
 
         self.assertEqual(decoded_pkt, cfx_codecs.complex_value_packet.parse(pkt))
 
     def test_variable_description_packet(self):
-        pkt = b':VAL\x00VM\x00\x01\x00\x00A\xff\xff\xff\xff\xff\xff\xffC\n\xff\xff\xff' \
+        pkt = b':VAL\x00VM\x00\x01\x00\x00A\xff\xff\xff\xff\xff\xff\xffVariableC\n\xff\xff\xff' \
               b'\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff'
         decoded_pkt = Container(requested_variable_type='VARIABLE',
                                 isInUse='TRUE',
