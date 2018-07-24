@@ -1,8 +1,8 @@
 from construct import \
     Struct, Const, Padding, Int8ub, Bytes, BitStruct, Flag, BitsInteger, Enum, Byte
 
-variableIsInUse = Enum(Bytes(1), TRUE=b'\x01', FALSE=b'\x00')
 realOrComplex = Enum(Bytes(9), REAL=b'VariableR', COMPLEX=b'VariableC')
+realOrComplex = Enum(Bytes(1), REAL=b'R', COMPLEX=b'C')
 variableType = Enum(Bytes(2), VARIABLE=b'VM', LIST=b'LT', MATRIX=b'MT', IMAGE=b'PC')
 
 # Checksum byte needs to be removed before the packet is parsed!
@@ -50,11 +50,12 @@ variable_description_packet = Struct(
     "requested_variable_type" / variableType,
     Padding(1),
     # Doubles as rowsize for matrix data
-    "isInUse" / variableIsInUse,
+    "rowsize" / Bytes(1),
     Padding(1),
     # Doubles as colsize for matrix data
-    Padding(1),
+    "colsize" / Bytes(1),
     "variable_name" / Bytes(8),
+    Padding(8),
     "real_or_complex" / realOrComplex,
     Padding(1, pattern=b'\x0A'),
     Padding(19, pattern=b'\xff')

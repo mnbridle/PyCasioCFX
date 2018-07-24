@@ -14,10 +14,10 @@ class cfxStateMachine(object):
 
         # Data store
         self.data_store = {
-            'VM': {},
-            'PC': {},
-            'MT': {},
-            'LT': {}
+            'VARIABLE': {},
+            'PICTURE': {},
+            'MATRIX': {},
+            'LIST': {}
         }
 
         states = ["WaitForWakeup", "WaitForTransactionRequestPacket",
@@ -100,9 +100,11 @@ class cfxStateMachine(object):
             number_of_data_items = 1
             transaction_data = None
         elif self.transaction["requested_variable_type"] == cfx_codecs.variableType.MATRIX:
-            number_of_data_items = self.transaction['row'] * self.transaction['col']
+            print(self.transaction)
+            number_of_data_items = ord(self.transaction['rowsize']) * ord(self.transaction['colsize'])
             self.transaction["real_or_complex"] = cfx_codecs.realOrComplex.REAL
-            transaction_data = [[0 for x in range(self.transaction['col'])] for y in range(self.transaction['row'])]
+            transaction_data = [[0 for x in range(ord(self.transaction['colsize']))] for y in
+                                range(ord(self.transaction['rowsize']))]
         else:
             return
 
@@ -123,13 +125,21 @@ class cfxStateMachine(object):
             self._ackTransactionRequest()
             item_count += 1
 
-            print(data_item)
+        self.store_data(transaction=self.transaction, data=transaction_data)
 
-        print(transaction_data)
+        print(self.data_store)
 
     def _sendTransactionData(self):
         # Send some data to the calculator
-        pass
+        print("Send transaction data!")
+        print(self.transaction)
+
+
+    def store_data(self, transaction, data):
+        variable_name = transaction['variable_name'].strip(b'\xff').decode('ascii')
+        variable_type = str(self.transaction['requested_variable_type'])
+        self.data_store[variable_type][variable_name] = data
+        print("Data stored: type {}, name {}".format(variable_type, variable_name))
 
 
 stateMachine = cfxStateMachine(serial_port='COM1')

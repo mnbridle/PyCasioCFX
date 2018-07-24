@@ -24,7 +24,7 @@ def decode_packet(packet):
     if packet_type == ":REQ":
         decoded_packet = decode_request_packet(packet)
     elif packet_type == ":VAL":
-        decoded_packet = decode_value_description_packet(packet)
+        decoded_packet = decode_variable_description_packet(packet)
     elif packet_type == ":END":
         pass
     else:
@@ -44,13 +44,13 @@ def decode_request_packet(packet):
     return decoded_packet
 
 
-def decode_value_description_packet(packet):
+def decode_variable_description_packet(packet):
     """
 
     :param packet:
     :return:
     """
-
+    print(packet)
     decoded_packet = cfx_codecs.variable_description_packet.parse(packet)
     return decoded_packet
 

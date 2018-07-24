@@ -50,10 +50,11 @@ class TestCfxCodecs(unittest.TestCase):
         self.assertEqual(decoded_pkt, cfx_codecs.complex_value_packet.parse(pkt))
 
     def test_variable_description_packet(self):
-        pkt = b':VAL\x00VM\x00\x01\x00\x00A\xff\xff\xff\xff\xff\xff\xffVariableC\n\xff\xff\xff' \
+        pkt = b':VAL\x00VM\x00\x01\x00\x01A\xff\xff\xff\xff\xff\xff\xffVariableC\n\xff\xff\xff' \
               b'\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff'
         decoded_pkt = Container(requested_variable_type='VARIABLE',
-                                isInUse='TRUE',
+                                rowsize=b'\x01',
+                                colsize=b'\x01',
                                 variable_name=b"A\xFF\xFF\xFF\xFF\xFF\xFF\xFF",
                                 real_or_complex='COMPLEX')
 
