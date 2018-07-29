@@ -58,7 +58,7 @@ variable_description_packet = Struct(
     Padding(8),
     "real_or_complex" / realOrComplex,
     Padding(1, pattern=b'\x0A'),
-    Padding(19, pattern=b'\xff')
+    Padding(20, pattern=b'\xff')
 )
 
 request_packet = Struct(

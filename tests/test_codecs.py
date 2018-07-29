@@ -51,7 +51,7 @@ class TestCfxCodecs(unittest.TestCase):
 
     def test_variable_description_packet(self):
         pkt = b':VAL\x00VM\x00\x01\x00\x01A\xff\xff\xff\xff\xff\xff\xffVariableC\n\xff\xff\xff' \
-              b'\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff'
+              b'\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff'
         decoded_pkt = Container(requested_variable_type='VARIABLE',
                                 rowsize=b'\x01',
                                 colsize=b'\x01',

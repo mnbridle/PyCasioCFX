@@ -1,6 +1,9 @@
 import logging
 import numpy as np
 from helpers import cfx_codecs
+from construct import Container
+import binascii
+from pprint import pprint, pformat
 
 
 def decode_packet(packet):
@@ -50,7 +53,6 @@ def decode_variable_description_packet(packet):
     :param packet:
     :return:
     """
-    print(packet)
     decoded_packet = cfx_codecs.variable_description_packet.parse(packet)
     return decoded_packet
 
@@ -102,6 +104,62 @@ def decode_value_packet(packet):
             'col': ord(decoded_packet["col"])}
 
 
+def encode_value_packet(data):
+    processed_real_part = process_value(data.real)
+    processed_imag_part = process_value(data.imag)
+
+    value_packet_response = Container(row=b'\x00', col=b'\x00',
+                                      real_int=binascii.unhexlify('0'+str(processed_real_part['int_part'])),
+                                      real_frac=convertIntToBcdDigits(processed_real_part['frac_part']),
+                                      real_signinfo=Container(
+                                          isComplex=(False if data.imag is 0 else True),
+                                          isNegative=processed_real_part['isNegative'],
+                                          expSignIsPositive=processed_real_part['expIsPositive']
+                                      ), real_exponent=binascii.unhexlify('0'+str(processed_real_part['exp_part'])),
+                                      imag_int=binascii.unhexlify('0'+str(processed_imag_part['int_part'])),
+                                      imag_frac=convertIntToBcdDigits(processed_imag_part['frac_part']),
+                                      imag_signinfo=Container(
+                                          isComplex=(False if data.imag is 0 else True),
+                                          isNegative=processed_imag_part['isNegative'],
+                                          expSignIsPositive=processed_imag_part['expIsPositive']
+                                      ), imag_exponent=binascii.unhexlify('0'+str(processed_imag_part['exp_part'])))
+
+    return value_packet_response
+
+
+def process_value(raw_value):
+    value = {}
+    value['raw'] = str(raw_value)
+
+    if '.' in str(value['raw']):
+        value['int_part'], value['frac_part'] = value['raw'].split('.')
+        if 'e' in value['frac_part']:
+            value['frac_part'], value['exp_part'] = value['frac_part'].split('e')
+        else:
+            value['exp_part'] = 0
+
+        value['int_part'] = int(value['int_part'])
+        value['frac_part'] = int(value['frac_part'])
+        value['exp_part'] = int(value['exp_part'])
+
+        value['isNegative'] = value['int_part'] < 0
+        value['int_part'] = abs(value['int_part'])
+
+        value['expIsPositive'] = value['exp_part'] >= 0
+        value['exp_part'] = abs(value['exp_part'])
+
+    else:
+        # Make it a fraction then calculate the exponent
+        value['isNegative'] = (True if str(value['raw'])[0] == '-' else False)
+        value['expIsPositive'] = True
+        temp_real = str(abs(value['raw']))
+        value['int_part'] = int(temp_real[0])
+        value['frac_part'] = int(temp_real[1:])
+        value['exp_part'] = len(temp_real)-1
+
+    return value
+
+
 def checksum_valid(packet):
     """
     Return true or false depending on if the packet's checksum is verified
@@ -132,3 +190,13 @@ def convertBcdDigitsToInt(bcd_digits):
         result.extend([val for val in (digit >> 4, digit & 0xF)])
 
     return ''.join([str(x) for x in result])
+
+
+def convertIntToBcdDigits(data, pad_to_length=7):
+    data = str(data)
+    if len(data) % 2 != 0:
+        data += '0'
+
+    # Pad this out to pad_to_length bytes
+    padded_data = data.ljust(pad_to_length*2, '0')
+    return binascii.unhexlify(padded_data)

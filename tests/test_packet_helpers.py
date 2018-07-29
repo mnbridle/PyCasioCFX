@@ -9,5 +9,6 @@ class TestCfxCodecs(unittest.TestCase):
         pkt = cfx_codecs.request_packet.build(Container(requested_variable_type='VARIABLE',
                                                         variable_name=b'A\xFF\xFF\xFF\xFF\xFF\xFF\xFF'))
         pkt = packet_helpers.calculate_checksum(pkt)
+        self.assertTrue(len(pkt), 50)
         self.assertTrue(packet_helpers.checksum_valid(pkt))
 
