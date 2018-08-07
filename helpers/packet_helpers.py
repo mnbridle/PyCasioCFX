@@ -3,7 +3,7 @@ import numpy as np
 from helpers import cfx_codecs
 from construct import Container
 import binascii
-from pprint import pprint, pformat
+from decimal import *
 
 
 def decode_packet(packet):
@@ -129,33 +129,22 @@ def encode_value_packet(data):
 
 def process_value(raw_value):
     value = {}
-    value['raw'] = str(raw_value)
+    value['raw'] = '{0:.14E}'.format(Decimal(str(raw_value)))
 
-    if '.' in str(value['raw']):
-        value['int_part'], value['frac_part'] = value['raw'].split('.')
-        if 'e' in value['frac_part']:
-            value['frac_part'], value['exp_part'] = value['frac_part'].split('e')
-        else:
-            value['exp_part'] = 0
+    value['int_part'], value['frac_part'] = value['raw'].split('.')
+    value['frac_part'], value['exp_part'] = value['frac_part'].split('E')
 
-        value['int_part'] = int(value['int_part'])
-        value['frac_part'] = int(value['frac_part'])
-        value['exp_part'] = int(value['exp_part'])
+    value['int_part'] = int(value['int_part'])
+    value['frac_part'] = int(value['frac_part'])
+    value['exp_part'] = int(value['exp_part'])
 
-        value['isNegative'] = value['int_part'] < 0
-        value['int_part'] = abs(value['int_part'])
+    value['isNegative'] = value['int_part'] < 0
+    value['int_part'] = abs(value['int_part'])
 
-        value['expIsPositive'] = value['exp_part'] >= 0
-        value['exp_part'] = abs(value['exp_part'])
+    value['expIsPositive'] = value['exp_part'] >= 0
+    value['exp_part'] = abs(value['exp_part'])
 
-    else:
-        # Make it a fraction then calculate the exponent
-        value['isNegative'] = (True if str(value['raw'])[0] == '-' else False)
-        value['expIsPositive'] = True
-        temp_real = str(abs(value['raw']))
-        value['int_part'] = int(temp_real[0])
-        value['frac_part'] = int(temp_real[1:])
-        value['exp_part'] = len(temp_real)-1
+    print(value)
 
     return value
 
@@ -168,6 +157,8 @@ def checksum_valid(packet):
     """
 
     calculated_checksum = (0x01 + (~(sum(packet[:-1]) - 0x3A))) & 0xFF
+    logging.info("Checksum was {}, expecting {}".format(hex(calculated_checksum), hex(packet[-1])))
+    logging.info(packet)
     return calculated_checksum == packet[-1]
 
 
@@ -194,6 +185,9 @@ def convertBcdDigitsToInt(bcd_digits):
 
 def convertIntToBcdDigits(data, pad_to_length=7):
     data = str(data)
+    if data == '0':
+        data = '00000000000000'
+
     if len(data) % 2 != 0:
         data += '0'
 

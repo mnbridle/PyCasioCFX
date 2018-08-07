@@ -12,7 +12,7 @@ class TestCfxCodecs(unittest.TestCase):
         self.assertEqual(parsed_signinfobyte["isNegative"], False)
         self.assertEqual(parsed_signinfobyte["expSignIsPositive"], False)
 
-        parsed_signinfobyte = cfx_codecs.signinfobyte.parse(b'\x40')
+        parsed_signinfobyte = cfx_codecs.signinfobyte.parse(b'\x50')
         self.assertEqual(parsed_signinfobyte["isComplex"], False)
         self.assertEqual(parsed_signinfobyte["isNegative"], True)
         self.assertEqual(parsed_signinfobyte["expSignIsPositive"], False)

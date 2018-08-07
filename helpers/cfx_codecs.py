@@ -10,7 +10,9 @@ variableType = Enum(Bytes(2), VARIABLE=b'VM', LIST=b'LT', MATRIX=b'MT', IMAGE=b'
 signinfobyte = BitStruct(
     "isComplex" / Flag,
     "isNegative" / Flag,
-    Padding(5),
+    Padding(1),
+    "isNegative" / Flag,
+    Padding(3),
     "expSignIsPositive" / Flag
 )
 

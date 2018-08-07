@@ -19,7 +19,7 @@ class cfxStateMachine(object):
         # Data store
         self.data_store = {
             'VARIABLE': {
-                'A': np.complex(-1.23456789, -1.987654321)
+                'A': np.complex(123456789, -5654256)
             },
             'PICTURE': {},
             'MATRIX': {},
@@ -28,7 +28,6 @@ class cfxStateMachine(object):
 
         self._createStateMachine()
         self.initialise()
-        
     
     def _initialiseLogging(self):
         logging.basicConfig(format='%(asctime)s.%(msecs)03d %(name)s %(levelname)s %(message)s', datefmt='%F %H:%M:%S',
@@ -38,7 +37,7 @@ class cfxStateMachine(object):
 
     def _createStateMachine(self):
         states = ["wait_for_wakeup", "wait_for_transaction_request_packet",
-                  "process_transaction", "wait_for_wakeup"]
+                  "process_transaction"]
 
         transitions = [
             {'trigger': 'initialise', 'source': 'initial', 'dest': 'wait_for_wakeup',
@@ -98,7 +97,7 @@ class cfxStateMachine(object):
     def _wait_for_single_byte(self, wait_for_byte=b'\x06'):
         succeeded = False
         while not succeeded:
-            time.sleep(0.1)
+            time.sleep(0.01)
             serdata = self.serial_connection.read(size=1)
             succeeded = (True if serdata == wait_for_byte else False)
         return succeeded
@@ -123,6 +122,9 @@ class cfxStateMachine(object):
             self.logger.debug("The calculator is prematurely ending the transaction - nothing to do?")
         else:
             self.logger.info("Not entirely sure what's going on here")
+
+        self.logger.info("Transaction processed! Returning to waiting mode...")
+        self.transaction_processed()
 
     def _receive_transaction_data(self):
         self.logger.info("Processing transaction - receiving data")
@@ -186,46 +188,18 @@ class cfxStateMachine(object):
                     cfx_codecs.variable_description_packet.build(request_response)
                 )
         self.serial_connection.write(packet)
-
         self._wait_for_acknowledgement()
 
         self.logger.info("Send value packet")
         # Send value packet
         value_packet_response = packet_helpers.encode_value_packet(retrieved_value)
-        value_packet_response_example = Container(row=b'\x00', col=b'\x00',
-                                          real_int=b'\x01', real_frac=b'\x01#Eg\x89\x01#',
-                                          real_signinfo=Container(
-                                              isComplex=True,
-                                              isNegative=False,
-                                              expSignIsPositive=True
-                                          ), real_exponent=b'\x05',
-                                          imag_int=b'\x01', imag_frac=b'\x01#Eg\x89\x01#',
-                                          imag_signinfo=Container(
-                                              isComplex=True,
-                                              isNegative=False,
-                                              expSignIsPositive=True
-                                          ), imag_exponent=b'\x05')
-
         packet_to_write = packet_helpers.calculate_checksum(
             cfx_codecs.complex_value_packet.build(
                 value_packet_response
             )
         )
 
-        packet_to_compare = packet_helpers.calculate_checksum(
-            cfx_codecs.complex_value_packet.build(
-                value_packet_response_example
-            )
-        )
-
         self.logger.info("Packet to write: {}, len: {}".format(packet_to_write, len(packet_to_write)))
-        self.logger.info("Packet to check: {}, len: {}".format(packet_to_compare, len(packet_to_compare)))
-
-        print("Packet to compare:")
-        print(cfx_codecs.complex_value_packet.parse(packet_to_compare))
-        print("Packet to write:")
-        print(cfx_codecs.complex_value_packet.parse(packet_to_write))
-
         self.serial_connection.write(
             packet_helpers.calculate_checksum(
                 cfx_codecs.complex_value_packet.build(
