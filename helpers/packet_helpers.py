@@ -3,7 +3,18 @@ import numpy as np
 from helpers import cfx_codecs
 from construct import Container
 import binascii
+import time
+import serial
 from decimal import *
+
+
+def wait_for_packet(ser):
+    packet = ""
+    serdata = ser.read(50)
+    if serdata == b'':
+        raise serial.SerialTimeoutException
+
+    return serdata
 
 
 def decode_packet(packet):
@@ -16,6 +27,24 @@ def decode_packet(packet):
 
     decoded_packet = {}
 
+    if len(packet) == 1:
+        if packet[0] == 0x15:
+            decoded_packet['packet_type'] = 'wakeup'
+        elif packet[0] == 0x06:
+            decoded_packet['packet_type'] = 'ack'
+        elif packet[0] == 0x13:
+            decoded_packet['packet_type'] = 'wakeup_ack'
+        elif packet[0] == 0x22:
+            logging.warning("Calculator aborted the transaction, it received something inappropriate")
+            decoded_packet['packet_type'] = 'aborted'
+        else:
+            logging.debug("Received unknown packet")
+            decoded_packet['packet_type'] = 'unknown'
+            decoded_packet['raw_contents'] = packet
+            logging.debug(decoded_packet)
+
+        return decoded_packet
+
     if not checksum_valid(packet):
         logging.error("Checksum was incorrect!")
         return {}
@@ -26,11 +55,14 @@ def decode_packet(packet):
 
     if packet_type == ":REQ":
         decoded_packet = decode_request_packet(packet)
+        packet_type = "receive_request"
     elif packet_type == ":VAL":
         decoded_packet = decode_variable_description_packet(packet)
+        packet_type = "send_request"
     elif packet_type == ":END":
-        pass
+        packet_type = "end_packet"
     else:
+        packet_type = "value"
         decoded_packet = decode_value_packet(packet)
 
     decoded_packet['packet_type'] = packet_type
@@ -64,7 +96,7 @@ def decode_value_packet(packet):
     :return:
     """
 
-    if len(packet) == 16:
+    if len(packet) == 15:
         decoded_packet = cfx_codecs.real_value_packet.parse(packet)
     else:
         decoded_packet = cfx_codecs.complex_value_packet.parse(packet)
@@ -105,24 +137,45 @@ def decode_value_packet(packet):
 
 
 def encode_value_packet(data):
-    processed_real_part = process_value(data.real)
-    processed_imag_part = process_value(data.imag)
+    processed_real_part = process_value(data["data"].real)
+    processed_imag_part = process_value(data["data"].imag)
 
-    value_packet_response = Container(row=b'\x00', col=b'\x00',
-                                      real_int=binascii.unhexlify('0'+str(processed_real_part['int_part'])),
+    row = bytes(chr(data["row"]), "ascii")
+    col = bytes(chr(data["col"]), "ascii")
+
+    # Calculate exponent - todo: DRY!
+    if not processed_real_part['expIsPositive']:
+        processed_real_part['exp_part'] = (-1*processed_real_part['exp_part'])+100
+
+    if not processed_imag_part['expIsPositive']:
+        processed_imag_part['exp_part'] = (-1*processed_imag_part['exp_part'])+100
+
+    real_exponent = binascii.unhexlify(str(processed_real_part['exp_part']).zfill(2))
+    imag_exponent = binascii.unhexlify(str(processed_imag_part['exp_part']).zfill(2))
+
+    value_packet_real = Container(row=row, col=col,
+                                      real_int=binascii.unhexlify(str(processed_real_part['int_part']).zfill(2)),
                                       real_frac=convertIntToBcdDigits(processed_real_part['frac_part']),
                                       real_signinfo=Container(
-                                          isComplex=(False if data.imag is 0 else True),
+                                          isComplex=(True if data['real_or_complex'] ==
+                                                     cfx_codecs.realOrComplex.COMPLEX else False),
                                           isNegative=processed_real_part['isNegative'],
                                           expSignIsPositive=processed_real_part['expIsPositive']
-                                      ), real_exponent=binascii.unhexlify('0'+str(processed_real_part['exp_part'])),
-                                      imag_int=binascii.unhexlify('0'+str(processed_imag_part['int_part'])),
+                                      ), real_exponent=real_exponent)
+
+    if data['real_or_complex'] == cfx_codecs.realOrComplex.COMPLEX:
+        value_packet_imag = Container(imag_int=binascii.unhexlify(str(processed_imag_part['int_part']).zfill(2)),
                                       imag_frac=convertIntToBcdDigits(processed_imag_part['frac_part']),
                                       imag_signinfo=Container(
-                                          isComplex=(False if data.imag is 0 else True),
+                                          isComplex=(True if data['real_or_complex'] ==
+                                                     cfx_codecs.realOrComplex.COMPLEX else False),
                                           isNegative=processed_imag_part['isNegative'],
                                           expSignIsPositive=processed_imag_part['expIsPositive']
-                                      ), imag_exponent=binascii.unhexlify('0'+str(processed_imag_part['exp_part'])))
+                                      ), imag_exponent=imag_exponent)
+
+        value_packet_response = {**value_packet_real, **value_packet_imag}
+    else:
+        value_packet_response = {**value_packet_real}
 
     return value_packet_response
 
@@ -144,8 +197,6 @@ def process_value(raw_value):
     value['expIsPositive'] = value['exp_part'] >= 0
     value['exp_part'] = abs(value['exp_part'])
 
-    print(value)
-
     return value
 
 
@@ -157,8 +208,6 @@ def checksum_valid(packet):
     """
 
     calculated_checksum = (0x01 + (~(sum(packet[:-1]) - 0x3A))) & 0xFF
-    logging.info("Checksum was {}, expecting {}".format(hex(calculated_checksum), hex(packet[-1])))
-    logging.info(packet)
     return calculated_checksum == packet[-1]
 
 
@@ -183,14 +232,6 @@ def convertBcdDigitsToInt(bcd_digits):
     return ''.join([str(x) for x in result])
 
 
-def convertIntToBcdDigits(data, pad_to_length=7):
-    data = str(data)
-    if data == '0':
-        data = '00000000000000'
-
-    if len(data) % 2 != 0:
-        data += '0'
-
-    # Pad this out to pad_to_length bytes
-    padded_data = data.ljust(pad_to_length*2, '0')
+def convertIntToBcdDigits(data):
+    padded_data = str(data).zfill(14)
     return binascii.unhexlify(padded_data)

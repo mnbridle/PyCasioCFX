@@ -1,226 +1,313 @@
 from transitions import Machine
+from collections import deque
+from threading import Thread
 import time
+from helpers import packet_helpers, statemachine_helpers, cfx_codecs
 import serial
-from helpers import packet_helpers, cfx_codecs
-from construct import Container
 import logging
-from pprint import pprint, pformat
 import numpy as np
+from construct import Container
 
 
-class cfxStateMachine(object):
+class CFX(object):
+
     def __init__(self, serial_port):
         self._initialiseLogging()
 
+        self.rx_message_queue = deque()
+        self.tx_message_queue = deque()
+
         self.serial_port = serial_port
         self.serial_connection = None
-        self.transaction = None
 
-        # Data store
         self.data_store = {
-            'VARIABLE': {
-                'A': np.complex(123456789, -5654256)
-            },
+            'VARIABLE': {},
             'PICTURE': {},
             'MATRIX': {},
             'LIST': {}
         }
 
-        self._createStateMachine()
-        self.initialise()
-    
+        states = []
+        transitions = []
+
+        initial_transitions = [
+            {'trigger': 'initialised', 'source': 'init', 'dest': 'wait_for_wakeup'},
+            {'trigger': 'input_received', 'conditions': statemachine_helpers.packet_is_type_wakeup,
+             'source': 'wait_for_wakeup', 'dest': 'wait_for_request_packet'},
+            {'trigger': 'input_received', 'conditions': statemachine_helpers.packet_is_type_receive_request,
+             'source': 'wait_for_request_packet', 'dest': 'start_transaction_rx'},
+            {'trigger': 'input_received', 'conditions': statemachine_helpers.packet_is_type_send_request,
+             'source': 'wait_for_request_packet', 'dest': 'start_transaction_tx'}
+            ]
+
+        receive_transitions = [
+            {'trigger': 'input_received', 'conditions': statemachine_helpers.packet_is_type_ack,
+             'source': 'start_transaction_rx', 'dest': 'send_variable_description_packet'},
+            {'trigger': 'input_received', 'conditions':  statemachine_helpers.packet_is_type_ack,
+             'source': 'send_variable_description_packet', 'dest': 'send_value_packet'},
+            {'trigger': 'input_received', 'conditions':  [statemachine_helpers.packet_is_type_ack,
+                                                          self.no_values_left_to_send],
+             'source': 'send_value_packet', 'dest': 'send_end_packet'},
+            {'trigger': 'input_received', 'conditions':  statemachine_helpers.packet_is_type_wakeup,
+             'source': 'send_end_packet', 'dest': 'wait_for_request_packet'}
+        ]
+
+        send_transitions = [
+            {'trigger': 'input_received', 'conditions': [statemachine_helpers.packet_is_type_value,
+                                                         self.values_left_to_receive],
+             'source': 'start_transaction_tx', 'dest': 'receive_value_packet'},
+
+            {'trigger': 'input_received', 'conditions': [statemachine_helpers.packet_is_type_value,
+                                                         self.values_left_to_receive],
+             'source': 'receive_value_packet', 'dest': 'receive_value_packet'},
+
+            {'trigger': 'input_received', 'conditions': statemachine_helpers.packet_is_type_end_packet,
+             'source': 'receive_value_packet', 'dest': 'wait_for_wakeup'}
+        ]
+
+        transitions.extend(initial_transitions)
+        transitions.extend(receive_transitions)
+        transitions.extend(send_transitions)
+
+        initial_states = ['init', 'wait_for_wakeup', 'wait_for_request_packet']
+        rx_transaction_states = ['start_transaction_rx', 'send_variable_description_packet',
+                                 'send_value_packet', 'send_end_packet']
+        tx_transaction_states = ['start_transaction_tx', 'receive_variable_description_packet',
+                                 'receive_value_packet', 'receive_end_packet']
+
+        states.extend(initial_states)
+        states.extend(rx_transaction_states)
+        states.extend(tx_transaction_states)
+
+        self.fsm = Machine(states=states, transitions=transitions, initial='init')
+        self.fsm.initialised()
+        self.create_serial_connection()
+
+        self.cfx_receiver = Thread(target=self.receive_data_from_port)
+        self.cfx_receiver.start()
+
+        self.process_requests_from_cfx()
+
     def _initialiseLogging(self):
         logging.basicConfig(format='%(asctime)s.%(msecs)03d %(name)s %(levelname)s %(message)s', datefmt='%F %H:%M:%S',
                             level=logging.INFO)
         self.logger = logging.getLogger("cfx_interface")
         self.logger.info("Initialising the CFX interface object.")
 
-    def _createStateMachine(self):
-        states = ["wait_for_wakeup", "wait_for_transaction_request_packet",
-                  "process_transaction"]
+    def receive_data_from_port(self):
+        while True:
+            try:
+                packet_data = packet_helpers.wait_for_packet(ser=self.serial_connection)
+                processed_packet = packet_helpers.decode_packet(packet=packet_data)
+                self.rx_message_queue.append(processed_packet)
+                time.sleep(0.01)
 
-        transitions = [
-            {'trigger': 'initialise', 'source': 'initial', 'dest': 'wait_for_wakeup',
-             'prepare': 'create_serial_connection'},
-            {'trigger': 'received_wakeup', 'source': 'wait_for_wakeup', 'dest': 'wait_for_transaction_request_packet',
-             'prepare': '_ack_wakeup'},
-            {'trigger': 'transaction_request_packet_rxed', 'source': 'wait_for_transaction_request_packet',
-             'dest': 'process_transaction', 'prepare': '_send_acknowledgement'},
-            {'trigger': 'transaction_processed', 'source': 'process_transaction', 'dest': 'wait_for_wakeup'},
-        ]
+            except serial.SerialTimeoutException:
+                time.sleep(0.01)
 
-        self.logger.debug('Creating state machine...')
-        self.machine = Machine(self, states=states, transitions=transitions)
-        self.machine.on_enter_wait_for_wakeup('_wait_for_wakeup')
-        self.machine.on_enter_wait_for_transaction_request_packet('_wait_for_transaction_request_packet')
-        self.machine.on_enter_process_transaction('_process_transaction')
+    def process_requests_from_cfx(self):
+        while True:
+            # if new messages are available in the buffer, trigger a transition attempt
+            if len(self.rx_message_queue) == 0:
+                time.sleep(0.01)
+                continue
+
+            packet = self.rx_message_queue.popleft()
+            self.fsm.input_received(packet=packet)
+
+            self.logger.info("Packet of type {} received".format(packet["packet_type"]))
+            self.logger.info("State is {}".format(self.fsm.state))
+
+            try:
+                self.logger.info("Values left to receive: {}".format(self.values_left_to_receive(packet)))
+                self.logger.info("Number: {}".format(self.transaction['values_left_to_receive']))
+            except AttributeError:
+                self.logger.info("No transaction currently in progress")
+            except KeyError:
+                pass
+
+            # Tree of things to do when the appropriate state is reached
+            if self.fsm.state == 'wait_for_request_packet':
+                self._wait_for_request_packet()
+            elif self.fsm.state == 'start_transaction_tx':
+                self._start_transaction_tx(packet=packet)
+            elif self.fsm.state == 'start_transaction_rx':
+                self._start_transaction_rx(packet=packet)
+            elif self.fsm.state == "send_variable_description_packet":
+                self._send_variable_description_packet(packet=packet)
+            elif self.fsm.state == "receive_variable_description_packet":
+                self._receive_variable_description_packet(packet=packet)
+            elif self.fsm.state == "send_value_packet":
+                self._send_value_packet(packet=packet)
+            elif self.fsm.state == "receive_value_packet":
+                self._receive_value_packet(packet=packet)
+            elif self.fsm.state == "send_end_packet":
+                self._send_end_packet()
+            elif self.fsm.state == "receive_end_packet":
+                self._receive_end_packet()
+
+            else:
+                self.logger.info("State is {}".format(self.fsm.state))
+            time.sleep(0.01)
+
+    def values_left_to_send(self, packet=None):
+        return len(self.tx_message_queue) > 0
+
+    def no_values_left_to_send(self, packet=None):
+        return len(self.tx_message_queue) == 0
+
+    def values_left_to_receive(self, packet=None):
+        return self.transaction["values_left_to_receive"] > 0
+
+    def no_values_left_to_receive(self, packet=None):
+        return self.transaction["values_left_to_receive"] == 0
 
     def create_serial_connection(self):
         self.logger.info('Setting up a serial connection on {}'.format(self.serial_port))
         ser = serial.Serial(port=self.serial_port, baudrate=9600, parity=serial.PARITY_NONE,
-                            bytesize=8, stopbits=serial.STOPBITS_TWO, timeout=0.1)
+                            bytesize=8, stopbits=serial.STOPBITS_TWO, timeout=3, inter_byte_timeout=0.05)
 
         # Set DTR, unset RTS
         ser.dtr = True
         ser.rts = False
         self.serial_connection = ser
 
-    def destroy_serial_connection(self):
-        self.logger.info('Destroying serial connection')
-        self.serial_connection.close()
-
-    def _wait_for_wakeup(self):
-        # Wait for "I am here" from calculator
-        self.logger.info("Waiting for wakeup from calculator")
-        self._wait_for_single_byte(wait_for_byte=b'\x15')
-        self.received_wakeup()
-
-    def _ack_wakeup(self):
-        self.logger.info("Acknowledge wakeup")
+    def _wait_for_request_packet(self):
+        self.logger.info("Wakeup received! Send acknowledgement")
         self.serial_connection.write(b'\x13')
 
-    def _wait_for_transaction_request_packet(self):
-        self.logger.info("Waiting for transaction request packet")
-        serdata = self._wait_for_packet(packet_length=50)
-        self.transaction = packet_helpers.decode_packet(packet=serdata)
-        self.transaction_request_packet_rxed()
-
-    def _send_acknowledgement(self):
-        self.logger.info("Send acknowledgement")
-        self.serial_connection.write(b'\x06')
-
-    def _wait_for_acknowledgement(self):
-        self.logger.debug("Waiting for acknowledgement")
-        self._wait_for_single_byte(wait_for_byte=b'\x06')
-        self.logger.info("Acknowledgement received")
-
-    def _wait_for_single_byte(self, wait_for_byte=b'\x06'):
-        succeeded = False
-        while not succeeded:
-            time.sleep(0.01)
-            serdata = self.serial_connection.read(size=1)
-            succeeded = (True if serdata == wait_for_byte else False)
-        return succeeded
-
-    def _wait_for_packet(self, packet_length=50):
-        succeeded = False
-        while not succeeded:
-            time.sleep(0.1)
-            serdata = self.serial_connection.read(size=packet_length)
-            succeeded = True
-
-        return serdata
-
-    def _process_transaction(self):
-        self.logger.info("Process transaction")
-
-        if self.transaction["tag"] == b'REQ':
-            self._send_transaction_data()
-        elif self.transaction["tag"] == b'VAL':
-            self._receive_transaction_data()
-        elif self.transaction["tag"] == b'END':
-            self.logger.debug("The calculator is prematurely ending the transaction - nothing to do?")
-        else:
-            self.logger.info("Not entirely sure what's going on here")
-
-        self.logger.info("Transaction processed! Returning to waiting mode...")
-        self.transaction_processed()
-
-    def _receive_transaction_data(self):
-        self.logger.info("Processing transaction - receiving data")
+    def _start_transaction_tx(self, packet):
+        self.logger.debug("Start transaction to receive stuff from the calculator")
+        self.transaction = packet
 
         if self.transaction["requested_variable_type"] == cfx_codecs.variableType.VARIABLE:
-            number_of_data_items = 1
-            transaction_data = None
+            self.transaction["values_left_to_receive"] = 1
+            self.transaction["transaction_data"] = None
+
         elif self.transaction["requested_variable_type"] == cfx_codecs.variableType.MATRIX:
-            number_of_data_items = ord(self.transaction['rowsize']) * ord(self.transaction['colsize'])
+            self.transaction["values_left_to_receive"] = ord(self.transaction['rowsize']) * ord(
+                self.transaction['colsize'])
             self.transaction["real_or_complex"] = cfx_codecs.realOrComplex.REAL
-            transaction_data = [[0 for x in range(ord(self.transaction['colsize']))] for y in
-                                range(ord(self.transaction['rowsize']))]
+            self.transaction["transaction_data"] = \
+                [[0 for x in range(ord(self.transaction['colsize']))] for y in range(ord(self.transaction['rowsize']))]
+
         else:
             self.logger.warning("Unsupported variable type requested! - {}".format(
                 self.transaction["requested_variable_type"]
             ))
             return
 
-        item_count = 0
-        while item_count < number_of_data_items:
-            serdata = self._wait_for_packet(packet_length=(16 if self.transaction["real_or_complex"] ==
-                                                           cfx_codecs.realOrComplex.REAL else 26))
+        self.logger.info("Transaction data: {}".format(self.transaction))
+        self.serial_connection.write(b'\x06')
 
-            self.logger.info("Received some data")
+    def _start_transaction_rx(self, packet):
+        self.logger.info("Start transaction to send stuff to calculator")
+        self.transaction = packet
 
-            data_item = packet_helpers.decode_value_packet(packet=serdata)
-            if self.transaction["requested_variable_type"] == cfx_codecs.variableType.MATRIX:
-                transaction_data[data_item['row']-1][data_item['col']-1] = data_item['value']
-            else:
-                transaction_data = data_item['value']
+        self.serial_connection.write(b'\x06')
 
-            self._send_acknowledgement()
-            item_count += 1
-
-        self._store_transaction_data(transaction=self.transaction, data=transaction_data)
-        self.logger.info('Contents of data store: ' + pformat(self.data_store))
-
-    def _send_transaction_data(self):
-        self.logger.info("Processing transaction - transmitting data")
-        self.logger.info(pformat(self.transaction))
-        self._wait_for_acknowledgement()
+    def _send_variable_description_packet(self, packet):
+        self.logger.info("Send variable description packet")
 
         # See if we have the requested data already
         variable_type = str(self.transaction['requested_variable_type'])
         variable_name = self.transaction['variable_name'].strip(b'\xff').decode('ascii')
 
+        retrieved_data = self.transaction["retrieved_data"] = {
+            'real_or_complex': "REAL",
+            'value': [[0]]
+        }
+
         try:
-            retrieved_value = self.data_store[variable_type][variable_name]
+            retrieved_data = self.data_store[variable_type][variable_name]
         except KeyError:
-            self.logger.warning("{} {} was not found, sending END packet...".format(variable_type, variable_name))
-            self._send_end_packet()
-            return
+            self.logger.warning("{} {} was not found, send END packet?".format(variable_type, variable_name))
+
+        self.transaction["retrieved_data"]["real_or_complex"] = retrieved_data['real_or_complex']
+
+        if variable_type == cfx_codecs.variableType.VARIABLE:
+            self.transaction['retrieved_data']['value'] = np.array([[retrieved_data['value']]])
+        elif variable_type == cfx_codecs.variableType.MATRIX:
+            self.transaction['retrieved_data']['value'] = retrieved_data['value']
+        else:
+            self.logger.warning("Unsupported datatype {}".format(str(variable_type)))
 
         self.logger.info("Send variable description packet")
-        request_response = Container(requested_variable_type='VARIABLE',
-                                     rowsize=b'\x01',
-                                     colsize=b'\x01',
+        request_response = Container(requested_variable_type=variable_type,
+                                     rowsize=(b'\x01' if variable_type == cfx_codecs.variableType.VARIABLE else
+                                              bytes(chr(self.transaction["retrieved_data"]["value"].shape[0]), "ascii")),
+                                     colsize=(b'\x01' if variable_type == cfx_codecs.variableType.VARIABLE else
+                                              bytes(chr(self.transaction["retrieved_data"]["value"].shape[1]), "ascii")),
                                      variable_name=b"A\xFF\xFF\xFF\xFF\xFF\xFF\xFF",
-                                     real_or_complex='COMPLEX')
+                                     real_or_complex=str(self.transaction["retrieved_data"]["real_or_complex"]))
+
         packet = packet_helpers.calculate_checksum(
                     cfx_codecs.variable_description_packet.build(request_response)
                 )
+
+        # Store packets to be sent in the transaction queue
+        for idx, data_row in enumerate(self.transaction['retrieved_data']['value']):
+            for idy, data_value in enumerate(data_row):
+
+                self.tx_message_queue.append({'row': idx+1, 'col': idy+1, 'data': data_value,
+                                              'real_or_complex':
+                                                  self.transaction["retrieved_data"]["real_or_complex"]})
+
+        self.logger.info("Appended {} items to the send queue".format(len(self.tx_message_queue)))
+
         self.serial_connection.write(packet)
-        self._wait_for_acknowledgement()
 
-        self.logger.info("Send value packet")
-        # Send value packet
-        value_packet_response = packet_helpers.encode_value_packet(retrieved_value)
-        packet_to_write = packet_helpers.calculate_checksum(
-            cfx_codecs.complex_value_packet.build(
-                value_packet_response
-            )
-        )
+    def _receive_variable_description_packet(self, packet):
+        self.logger.info("Receive variable description packet")
 
-        self.logger.info("Packet to write: {}, len: {}".format(packet_to_write, len(packet_to_write)))
-        self.serial_connection.write(
-            packet_helpers.calculate_checksum(
+    def _send_value_packet(self, packet):
+        self.logger.info("{} values left to transfer...".format(len(self.tx_message_queue)))
+        value_to_send = self.tx_message_queue.popleft()
+        value_packet_response = packet_helpers.encode_value_packet(data=value_to_send)
+
+        if value_to_send["real_or_complex"] == cfx_codecs.realOrComplex.COMPLEX:
+            packet_to_write = packet_helpers.calculate_checksum(
                 cfx_codecs.complex_value_packet.build(
                     value_packet_response
                 )
             )
+        else:
+            packet_to_write = packet_helpers.calculate_checksum(
+                cfx_codecs.real_value_packet.build(
+                    value_packet_response
+                )
+            )
+
+        self.logger.info("Packet to write: {}, len: {}".format(packet_to_write, len(packet_to_write)))
+        self.serial_connection.write(
+            packet_helpers.calculate_checksum(
+                packet_to_write
+            )
         )
 
-        self._wait_for_acknowledgement()
-        self._send_end_packet()
+    def _receive_value_packet(self, packet):
+        self.logger.info("Receive value packet")
 
-    def _store_transaction_data(self, transaction, data):
-        self.logger.info("Store received transaction data")
+        if self.transaction["requested_variable_type"] == cfx_codecs.variableType.MATRIX:
+            self.transaction["transaction_data"][packet['row']-1][packet['col']-1] = packet["value"]
+        else:
+            self.transaction["transaction_data"] = packet["value"]
 
-        variable_name = transaction['variable_name'].strip(b'\xff').decode('ascii')
+        # todo: should this be done after end_packet has been received?
+
+        variable_name = self.transaction['variable_name'].strip(b'\xff').decode('ascii')
         variable_type = str(self.transaction['requested_variable_type'])
-        self.data_store[variable_type][variable_name] = data
+        self.data_store[variable_type][variable_name] = {
+            "value": np.array(self.transaction["transaction_data"]),
+            "real_or_complex": self.transaction["real_or_complex"]
+        }
         self.logger.info("Data stored: type {}, name {}".format(variable_type, variable_name))
 
+        self.transaction["values_left_to_receive"] -= 1
+        self.serial_connection.write(b'\x06')
+
     def _send_end_packet(self):
-        self.logger.info("Sending end packet!")
+        self.logger.info("Send end packet")
         self.serial_connection.write(
             packet_helpers.calculate_checksum(
                 cfx_codecs.end_packet.build(
@@ -229,5 +316,8 @@ class cfxStateMachine(object):
             )
         )
 
+    def _receive_end_packet(self):
+        self.logger.info("Receive end packet")
 
-stateMachine = cfxStateMachine(serial_port='COM1')
+
+testClass_inst = CFX(serial_port="COM1")
