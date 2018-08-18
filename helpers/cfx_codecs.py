@@ -1,7 +1,6 @@
 from construct import \
     Struct, Const, Padding, Int8ub, Bytes, BitStruct, Flag, BitsInteger, Enum, Byte
 
-realOrComplex = Enum(Bytes(9), REAL=b'VariableR', COMPLEX=b'VariableC')
 realOrComplex = Enum(Bytes(1), REAL=b'R', COMPLEX=b'C')
 variableType = Enum(Bytes(2), VARIABLE=b'VM', LIST=b'LT', MATRIX=b'MT', IMAGE=b'PC')
 

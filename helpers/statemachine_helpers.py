@@ -1,5 +1,4 @@
 def packet_is_type_receive_request(packet):
-    print(packet["packet_type"])
     return packet["packet_type"] == "receive_request"
 
 
