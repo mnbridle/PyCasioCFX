@@ -18,12 +18,11 @@ class cfxStateMachine(object):
 
         # Data store
         self.data_store = {
-            'VARIABLE': {
-                'A': np.complex(123456789, -5654256)
-            },
+            'VARIABLE': {},
             'PICTURE': {},
             'MATRIX': {},
-            'LIST': {}
+            'LIST': {},
+            'SCREENSHOT': {}
         }
 
         self._createStateMachine()
@@ -58,7 +57,7 @@ class cfxStateMachine(object):
     def create_serial_connection(self):
         self.logger.info('Setting up a serial connection on {}'.format(self.serial_port))
         ser = serial.Serial(port=self.serial_port, baudrate=9600, parity=serial.PARITY_NONE,
-                            bytesize=8, stopbits=serial.STOPBITS_TWO, timeout=0.1)
+                            bytesize=8, stopbits=serial.STOPBITS_TWO, timeout=1.5)
 
         # Set DTR, unset RTS
         ser.dtr = True
@@ -72,7 +71,7 @@ class cfxStateMachine(object):
     def _wait_for_wakeup(self):
         # Wait for "I am here" from calculator
         self.logger.info("Waiting for wakeup from calculator")
-        self._wait_for_single_byte(wait_for_byte=b'\x15')
+        self._wait_for_single_byte(wait_for_byte=[b'\x15', b'\x16'])
         self.received_wakeup()
 
     def _ack_wakeup(self):
@@ -80,39 +79,38 @@ class cfxStateMachine(object):
         self.serial_connection.write(b'\x13')
 
     def _wait_for_transaction_request_packet(self):
-        self.logger.info("Waiting for transaction request packet")
         serdata = self._wait_for_packet(packet_length=50)
         self.transaction = packet_helpers.decode_packet(packet=serdata)
         self.transaction_request_packet_rxed()
 
     def _send_acknowledgement(self):
-        self.logger.info("Send acknowledgement")
         self.serial_connection.write(b'\x06')
 
     def _wait_for_acknowledgement(self):
-        self.logger.debug("Waiting for acknowledgement")
-        self._wait_for_single_byte(wait_for_byte=b'\x06')
-        self.logger.info("Acknowledgement received")
+        self._wait_for_single_byte(wait_for_byte=[b'\x06'])
 
-    def _wait_for_single_byte(self, wait_for_byte=b'\x06'):
+    def _wait_for_single_byte(self, wait_for_byte=[b'\x06']):
         succeeded = False
         while not succeeded:
-            time.sleep(0.01)
             serdata = self.serial_connection.read(size=1)
-            succeeded = (True if serdata == wait_for_byte else False)
+            succeeded = (True if serdata in wait_for_byte else False)
+            if not succeeded:
+                time.sleep(0.001)
+
         return succeeded
 
     def _wait_for_packet(self, packet_length=50):
         succeeded = False
         while not succeeded:
-            time.sleep(0.1)
+            if not succeeded:
+                time.sleep(0.001)
             serdata = self.serial_connection.read(size=packet_length)
             succeeded = True
 
         return serdata
 
     def _process_transaction(self):
-        self.logger.info("Process transaction")
+        self.logger.info("Process transaction: {}".format(self.transaction))
 
         if self.transaction["tag"] == b'REQ':
             self._send_transaction_data()
@@ -120,6 +118,10 @@ class cfxStateMachine(object):
             self._receive_transaction_data()
         elif self.transaction["tag"] == b'END':
             self.logger.debug("The calculator is prematurely ending the transaction - nothing to do?")
+        elif self.transaction["tag"] == b'DD@':
+            self.logger.debug("Experimental screenshot")
+            self._receive_screenshot_data()
+
         else:
             self.logger.info("Not entirely sure what's going on here")
 
@@ -127,6 +129,8 @@ class cfxStateMachine(object):
         self.transaction_processed()
 
     def _receive_transaction_data(self):
+        transaction_start = time.time()
+
         self.logger.info("Processing transaction - receiving data")
 
         if self.transaction["requested_variable_type"] == cfx_codecs.variableType.VARIABLE:
@@ -146,9 +150,7 @@ class cfxStateMachine(object):
         item_count = 0
         while item_count < number_of_data_items:
             serdata = self._wait_for_packet(packet_length=(16 if self.transaction["real_or_complex"] ==
-                                                           cfx_codecs.realOrComplex.REAL else 26))
-
-            self.logger.info("Received some data")
+                                                                 cfx_codecs.realOrComplex.REAL else 26))
 
             data_item = packet_helpers.decode_value_packet(packet=serdata)
             if self.transaction["requested_variable_type"] == cfx_codecs.variableType.MATRIX:
@@ -161,6 +163,11 @@ class cfxStateMachine(object):
 
         self._store_transaction_data(transaction=self.transaction, data=transaction_data)
         self.logger.info('Contents of data store: ' + pformat(self.data_store))
+
+        transaction_end = time.time()
+        transaction_time = transaction_end - transaction_start
+
+        self.logger.info("Transaction took {} seconds".format(transaction_time))
 
     def _send_transaction_data(self):
         self.logger.info("Processing transaction - transmitting data")
@@ -228,6 +235,27 @@ class cfxStateMachine(object):
                 )
             )
         )
+
+    def _receive_screenshot_data(self):
+        transaction_start = time.time()
+
+        self.logger.info("Processing transaction - receiving screenshot")
+
+        serdata = self._wait_for_packet(packet_length=1026)
+        data_item = packet_helpers.decode_screenshot_data_packet(serdata)
+
+        transaction_data = data_item['data']
+        self.transaction['variable_name'] = b'1'
+        self.transaction['variable_type'] = 'SCREENSHOT'
+        self._store_transaction_data(transaction=self.transaction, data=transaction_data)
+
+        transaction_end = time.time()
+        transaction_time = transaction_end - transaction_start
+
+        self.logger.info("Transaction took {} seconds".format(transaction_time))
+
+        # Convert to bitmap
+
 
 
 stateMachine = cfxStateMachine(serial_port='COM1')

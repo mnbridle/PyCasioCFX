@@ -30,7 +30,19 @@ def decode_packet(packet):
         decoded_packet = decode_variable_description_packet(packet)
     elif packet_type == ":END":
         pass
+    elif packet_type == ":IMG":
+        logging.warning("Data type is Picture")
+    elif packet_type == ":TXT":
+        logging.warning("Data type is TXT (program)")
+    elif packet_type == ":MEM":
+        logging.warning("Data type is program backup")
+    elif packet_type == ":FNC":
+        logging.warning("Data type is Function (YData etc.)")
+    elif packet_type == ":DD@":
+        logging.warning("Looks like a screenshot!")
+        decoded_packet = decode_screenshot_request_packet(packet)
     else:
+        logging.warning("Not entirely sure what this is (packet type {}), treating as a value packet".format(packet_type))
         decoded_packet = decode_value_packet(packet)
 
     decoded_packet['packet_type'] = packet_type
@@ -54,6 +66,16 @@ def decode_variable_description_packet(packet):
     :return:
     """
     decoded_packet = cfx_codecs.variable_description_packet.parse(packet)
+    return decoded_packet
+
+
+def decode_screenshot_request_packet(packet):
+    decoded_packet = cfx_codecs.screenshot_request_packet.parse(packet)
+    return decoded_packet
+
+
+def decode_screenshot_data_packet(packet):
+    decoded_packet = cfx_codecs.screenshot_data_packet.parse(packet)
     return decoded_packet
 
 

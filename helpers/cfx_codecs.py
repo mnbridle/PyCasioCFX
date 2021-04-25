@@ -3,7 +3,7 @@ from construct import \
 
 realOrComplex = Enum(Bytes(9), REAL=b'VariableR', COMPLEX=b'VariableC')
 realOrComplex = Enum(Bytes(1), REAL=b'R', COMPLEX=b'C')
-variableType = Enum(Bytes(2), VARIABLE=b'VM', LIST=b'LT', MATRIX=b'MT', IMAGE=b'PC')
+variableType = Enum(Bytes(2), VARIABLE=b'VM', LIST=b'LT', MATRIX=b'MT', IMAGE=b'PC', SCREENSHOT=b'DW')
 
 # Checksum byte needs to be removed before the packet is parsed!
 
@@ -77,4 +77,18 @@ end_packet = Struct(
     Const(b':'),
     "tag" / Const(b'END'),
     Padding(45, pattern=b'\xff')
+)
+
+screenshot_request_packet = Struct(
+    Const(b':'),
+    "tag" / Const(b'DD@'),
+    Padding(2),
+    "requested_variable_type" / variableType,
+    Padding(1),
+    "data" / Bytes(30)
+)
+
+screenshot_data_packet = Struct(
+    Const(b':'),
+    "data" / Bytes(1024)
 )
